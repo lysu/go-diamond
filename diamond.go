@@ -16,6 +16,11 @@ import (
 	"github.com/golang/glog"
 )
 
+var (
+	RefreshServerAddressInterval time.Duration = 5 * time.Minute
+	ConfigurationPollInterval                  = 5 * time.Second
+)
+
 type ConfigWatcher func(cfg string)
 
 type DiamondManager struct {
@@ -45,6 +50,11 @@ func NewDiamondManager(group string, dataID string, watcher ...ConfigWatcher) (*
 	if err != nil {
 		return nil, err
 	}
+	snapshotFolder := filepath.Join(confRoot, "snapshot")
+	err = os.MkdirAll(snapshotFolder, os.ModePerm)
+	if err != nil {
+		return nil, err
+	}
 	client, err := httpclient.NewHTTPClient(2*time.Second, 5*time.Second, 10)
 	if err != nil {
 		return nil, err
@@ -61,6 +71,9 @@ func NewDiamondManager(group string, dataID string, watcher ...ConfigWatcher) (*
 			client:          client,
 			addressEndpoint: addressEndpoint,
 		},
+		snapshotSubscriber: &snapshotSubscriber{
+			snapshotDir: snapshotFolder,
+		},
 	}
 	go manager.subscriber.start()
 	return manager, nil
@@ -73,14 +86,13 @@ func (m *DiamondManager) AvailableConfigureInformation(timeout time.Duration) (s
 type diamondSubscriber struct {
 	localFileSubscriber     *localFileSubscriber
 	serverAddressSubscriber *serverAddressSubscriber
+	snapshotSubscriber      *snapshotSubscriber
 }
 
 func (s *diamondSubscriber) start() {
 	s.localFileSubscriber.start()
-	go s.serverAddressSubscriber.start()
-	s.serverAddressSubscriber.req <- struct{}{}
-	s.serverAddressSubscriber.serverAddress = <-s.serverAddressSubscriber.resp
-	s.serverAddressSubscriber.storeServerAddressToLocal()
+	s.serverAddressSubscriber.start()
+	s.pollConfig()
 }
 
 type localFileSubscriber struct {
@@ -124,6 +136,26 @@ func (s *serverAddressSubscriber) storeServerAddressToLocal() {
 }
 
 func (s *serverAddressSubscriber) start() {
+	go s.acquireServerAddressLoop()
+	s.req <- struct{}{}
+	s.serverAddress = <-s.resp
+	s.storeServerAddressToLocal()
+	go s.refresh()
+}
+
+func (s *serverAddressSubscriber) refresh() {
+	ticker := time.NewTicker(RefreshServerAddressInterval)
+	for {
+		select {
+		case <-ticker.C:
+			s.req <- struct{}{}
+			s.serverAddress = <-s.resp
+			s.storeServerAddressToLocal()
+		}
+	}
+}
+
+func (s *serverAddressSubscriber) acquireServerAddressLoop() {
 	for {
 		select {
 		case _ = <-s.req:
@@ -161,6 +193,20 @@ func (s *serverAddressSubscriber) start() {
 	}
 }
 
-func (s *serverAddressSubscriber) syncAcquireServerAddress() {
+type snapshotSubscriber struct {
+	snapshotDir string
+}
+
+func (s *diamondSubscriber) pollConfig() {
+	ticker := time.NewTicker(ConfigurationPollInterval)
+	for {
+		select {
+		case <-ticker.C:
+			s.pollDiamondServer()
+		}
+	}
+}
+
+func (s *diamondSubscriber) pollDiamondServer() {
 
 }
