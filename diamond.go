@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/golang/glog"
 )
 
 type ConfigWatcher func(cfg string)
@@ -52,6 +54,7 @@ func NewDiamondManager(group string, dataID string, watcher ...ConfigWatcher) (*
 			dataFolder: dataFolder,
 		},
 		serverAddressSubscriber: &serverAddressSubscriber{
+			configDir:       confRoot,
 			req:             make(chan struct{}),
 			resp:            make(chan []string),
 			err:             make(chan error),
@@ -76,8 +79,8 @@ func (s *diamondSubscriber) start() {
 	s.localFileSubscriber.start()
 	go s.serverAddressSubscriber.start()
 	s.serverAddressSubscriber.req <- struct{}{}
-	list := <-s.serverAddressSubscriber.resp
-	fmt.Println(list)
+	s.serverAddressSubscriber.serverAddress = <-s.serverAddressSubscriber.resp
+	s.serverAddressSubscriber.storeServerAddressToLocal()
 }
 
 type localFileSubscriber struct {
@@ -89,11 +92,35 @@ func (l *localFileSubscriber) start() {
 }
 
 type serverAddressSubscriber struct {
+	configDir       string
+	serverAddress   []string
 	req             chan struct{}
 	resp            chan []string
 	err             chan error
 	client          *httpclient.Client
 	addressEndpoint string
+}
+
+func (s *serverAddressSubscriber) storeServerAddressToLocal() {
+	err := os.MkdirAll(s.configDir, os.ModePerm)
+	if err != nil {
+		glog.Errorf("Create Conf dir %s failure: %v", s.configDir, err)
+		return
+	}
+	serverAddressFile := filepath.Join(s.configDir, "ServerAddress")
+	file, err := os.Create(serverAddressFile)
+	if err != nil {
+		glog.Errorf("Create ServerAddress file %s failure: %v", serverAddressFile, err)
+		return
+	}
+	defer file.Close()
+	for _, addr := range s.serverAddress {
+		if _, err = file.WriteString(addr + "\n"); err != nil {
+			glog.Errorf("Write ServerAddress file %s failure: %v", serverAddressFile, err)
+			return
+		}
+	}
+	return
 }
 
 func (s *serverAddressSubscriber) start() {
