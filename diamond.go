@@ -75,7 +75,7 @@ func NewDiamondManager(group string, dataID string, watcher ...ConfigWatcher) (*
 			snapshotDir: snapshotFolder,
 		},
 	}
-	go manager.subscriber.start()
+	go withRecover(manager.subscriber.start)
 	return manager, nil
 }
 
@@ -136,15 +136,16 @@ func (s *serverAddressSubscriber) storeServerAddressToLocal() {
 }
 
 func (s *serverAddressSubscriber) start() {
-	go s.acquireServerAddressLoop()
+	go withRecover(s.acquireServerAddressLoop)
 	s.req <- struct{}{}
 	s.serverAddress = <-s.resp
 	s.storeServerAddressToLocal()
-	go s.refresh()
+	go withRecover(s.refresh)
 }
 
 func (s *serverAddressSubscriber) refresh() {
 	ticker := time.NewTicker(RefreshServerAddressInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
@@ -199,6 +200,7 @@ type snapshotSubscriber struct {
 
 func (s *diamondSubscriber) pollConfig() {
 	ticker := time.NewTicker(ConfigurationPollInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
@@ -209,4 +211,17 @@ func (s *diamondSubscriber) pollConfig() {
 
 func (s *diamondSubscriber) pollDiamondServer() {
 
+}
+
+func withRecover(fn func()) {
+	defer func() {
+		handler := nil// TODO
+		if handler != nil {
+			if err := recover(); err != nil {
+				handler(err)
+			}
+		}
+	}()
+
+	fn()
 }
